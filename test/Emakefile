@@ -1,0 +1,2 @@
+mnesia_eleveldb_xform.
+{'*', [{parse_transform, mnesia_eleveldb_xform},debug_info]}.

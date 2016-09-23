@@ -1,0 +1,12 @@
+{application, mnesia_eleveldb,
+ [
+  {description, "eleveldb backend plugin for Mnesia"},
+  {vsn, "1.0"},
+  {modules, [mnesia_eleveldb, mnesia_eleveldb_app,
+             mnesia_eleveldb_params, mnesia_eleveldb_sext,
+             mnesia_eleveldb_sup, mnesia_eleveldb_tuning]},
+  {registered, []},
+  {mod, {mnesia_eleveldb_app, []}},
+  {env, []},
+  {applications, [kernel, stdlib]}
+ ]}.
