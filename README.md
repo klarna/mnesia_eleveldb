@@ -10,7 +10,7 @@ mnesia tables.
 
 ## Getting started
 
-Call `mnesia_eleveldb:register(mnesia_eleveldb)` immediately after
+Call `mnesia_eleveldb:register()` immediately after
 starting mnesia.
 
 Put `{leveldb_copies, [node()]}` into the table definitions of
