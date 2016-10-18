@@ -127,7 +127,13 @@
 %% DEFINES
 %% ----------------------------------------------------------------------------
 
+%% Name of the LevelDB interface module; defaults to eleveldb but can be
+%% configured by passing -DLEVELDB_MODULE=<name_of_module> to erlc.
+-ifdef(LEVELDB_MODULE).
+-define(leveldb, ?LEVELDB_MODULE).
+-else.
 -define(leveldb, eleveldb). %% Name of the LevelDB interface module
+-endif.
 
 %% Data and meta data (a.k.a. info) are stored in the same table.
 %% This is a table of the first byte in data
