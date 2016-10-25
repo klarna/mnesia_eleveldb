@@ -246,20 +246,27 @@ i_show_table(I, Move, Limit) ->
 %% backend management
 
 init_backend() ->
-    stick_leveldb_dir(),
+    stick_eleveldb_dir(),
     application:start(mnesia_eleveldb),
     ok.
 
-stick_leveldb_dir() ->
+%% Prevent reloading of modules in eleveldb itself during runtime, since it
+%% can lead to inconsistent state in eleveldb and silent data corruption.
+stick_eleveldb_dir() ->
     case code:which(eleveldb) of
-        [_|_] = Beam ->
-            Res = code:stick_dir(D = filename:dirname(Beam)),
-            io:fwrite("stick_dir(~p) -> ~p~n", [D, Res]),
-            Res;
+        BeamPath when is_list(BeamPath), BeamPath =/= "" ->
+            Dir = filename:dirname(BeamPath),
+            case code:stick_dir(Dir) of
+                ok -> ok;
+                error -> warn_stick_dir({error, Dir})
+            end;
         Other ->
-            error_logger:error_report([{cannot_stick_leveldb_dir, Other}]),
-            Other
+            warn_stick_dir({not_found, Other})
     end.
+
+warn_stick_dir(Reason) ->
+    mnesia_lib:warning("cannot make eleveldb directory sticky:~n~p~n",
+                       [Reason]).
 
 add_aliases(_Aliases) ->
     ok.
