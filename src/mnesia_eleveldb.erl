@@ -148,12 +148,18 @@
 -define(BAG_CNT, 32).   % Number of bits used for bag object counter
 -define(MAX_BAG, 16#FFFFFFFF).
 
--ifdef(DEBUG).
--define(dbg(E), E).
+%% enable debugging messages through mnesia:set_debug_level(debug)
+-ifndef(MNESIA_ELEVELDB_NO_DBG).
+-define(dbg(Fmt, Args),
+        %% avoid evaluating Args if the message will be dropped anyway
+        case mnesia_monitor:get_env(debug) of
+            none -> ok;
+            verbose -> ok;
+            _ -> mnesia_lib:dbg_out("~p:~p: "++(Fmt),[?MODULE,?LINE|Args])
+        end).
 -else.
--define(dbg(E), ok).
+-define(dbg(Fmt, Args), ok).
 -endif.
-
 
 %% ----------------------------------------------------------------------------
 %% RECORDS
@@ -383,8 +389,8 @@ load_table_(Alias, Tab, Type, LdbOpts) ->
             %% TODO: Is it an error if the table already is
             %% loaded. This printout is triggered when running
             %% transform_table on a leveldb_table that has indexing.
-            ?dbg(io:fwrite("ERR: table:~p already loaded pid:~p~n",
-                           [Tab, _Pid])),
+            ?dbg("ERR: table:~p already loaded pid:~p~n",
+                 [Tab, _Pid]),
             ok;
 
         %% TODO: This reply is not according to the manual, but we get it.
@@ -392,14 +398,14 @@ load_table_(Alias, Tab, Type, LdbOpts) ->
             %% TODO: Is it an error if the table already is
             %% loaded. This printout is triggered when running
             %% transform_table on a leveldb_table that has indexing.
-            ?dbg(io:fwrite("ERR: table:~p already loaded pid:~p stack:~p~n",
-                           [Tab, _Pid, _Stack])),
+            ?dbg("ERR: table:~p already loaded pid:~p stack:~p~n",
+                 [Tab, _Pid, _Stack]),
             ok
     end.
 
 close_table(Alias, Tab) ->
-    ?dbg(io:fwrite("~p: close_table(~p, ~p);~n Caller = ~s~n",
-                   [self(), Alias, Tab, pp_calls(10, dbg_caller())])),
+    ?dbg("~p: close_table(~p, ~p);~n Trace: ~s~n",
+         [self(), Alias, Tab, pp_stack()]),
     if is_atom(Tab) ->
             [close_table(Alias, R)
              || {R, _} <- related_resources(Tab)];
@@ -411,19 +417,30 @@ close_table(Alias, Tab) ->
 close_table_(Alias, Tab) ->
     case opt_call(Alias, Tab, close_table) of
         {error, noproc} ->
-            ?dbg(io:fwrite(user, "~p: close_table_(~p) -> noproc~n",
-                           [self(),Tab])),
+            ?dbg("~p: close_table_(~p) -> noproc~n",
+                 [self(), Tab]),
             ok;
         {ok, _} ->
             ok;
         _Other ->
-            ?dbg(io:fwrite(user, "~p: close_table_(~p) -> _Other = ~p~n",
-                           [self(), Tab, _Other])),
+            ?dbg("~p: close_table_(~p) -> _Other = ~p~n",
+                 [self(), Tab, _Other]),
             mnesia_ext_sup:stop_proc(Tab),
             ok
     end.
 
--ifdef(DEBUG).
+-ifndef(MNESIA_ELEVELDB_NO_DBG).
+pp_stack() ->
+    Trace = try throw(true)
+            catch
+                _:_ ->
+                    case erlang:get_stacktrace() of
+                        [_|T] -> T;
+                        [] -> []
+                    end
+            end,
+    pp_calls(10, Trace).
+
 pp_calls(I, [{M,F,A,Pos} | T]) ->
     Spc = lists:duplicate(I, $\s),
     Pp = fun(Mx,Fx,Ax,Px) ->
@@ -431,28 +448,22 @@ pp_calls(I, [{M,F,A,Pos} | T]) ->
                  pp_pos(Px)]
         end,
     [Pp(M,F,A,Pos)|[["\n",Spc,Pp(M1,F1,A1,P1)] || {M1,F1,A1,P1} <- T]].
+
 pp_pos([]) -> "";
 pp_pos(L) when is_integer(L) ->
     [" (", integer_to_list(L), ")"];
 pp_pos([{file,_},{line,L}]) ->
     [" (", integer_to_list(L), ")"].
-
-dbg_caller() ->
-    try 1=2
-    catch
-        error:_ ->
-            tl(erlang:get_stacktrace())
-    end.
 -endif.
 
 sync_close_table(Alias, Tab) ->
-    ?dbg(io:fwrite("~p: sync_close_table(~p, ~p);~n Caller = ~s~n",
-                   [self(), Alias, Tab, pp_calls(10, dbg_caller())])),
+    ?dbg("~p: sync_close_table(~p, ~p);~n Trace: ~s~n",
+         [self(), Alias, Tab, pp_stack()]),
     close_table(Alias, Tab).
 
 delete_table(Alias, Tab) ->
-    ?dbg(io:fwrite("~p: delete_table(~p, ~p);~n Caller = ~s~n",
-                   [self(), Alias, Tab, pp_calls(10, dbg_caller())])),
+    ?dbg("~p: delete_table(~p, ~p);~n Trace: ~s~n",
+         [self(), Alias, Tab, pp_stack()]),
     delete_table(Alias, Tab, data_mountpoint(Tab)).
 
 delete_table(Alias, Tab, MP) ->
@@ -873,7 +884,7 @@ init({Alias, Tab, Type, LdbOpts}) ->
 
 do_load_table(Tab, LdbOpts) ->
     MPd = data_mountpoint(Tab),
-    ?dbg(io:fwrite("** Mountpoint: ~p~n ~s~n", [MPd, os:cmd("ls -r " ++ MPd)])),
+    ?dbg("** Mountpoint: ~p~n ~s~n", [MPd, os:cmd("ls " ++ MPd)]),
     Ets = ets:new(tab_name(icache,Tab), [set, protected, named_table]),
     {ok, Ref} = open_leveldb(MPd, LdbOpts),
     leveldb_to_ets(Ref, Ets),
@@ -898,7 +909,7 @@ handle_call({delete, Key}, _From, St) ->
     {reply, ok, St};
 handle_call(clear_table, _From, #st{ets = Ets, tab = Tab, ref = Ref} = St) ->
     MPd = data_mountpoint(Tab),
-    ?dbg(io:fwrite(user, "Attempting clear_table(~p)~n", [Tab])),
+    ?dbg("Attempting clear_table(~p)~n", [Tab]),
     _ = eleveldb_close(Ref),
     {ok, NewRef} = destroy_recreate(MPd, leveldb_open_opts(Tab)),
     ets:delete_all_objects(Ets),
@@ -941,7 +952,7 @@ handle_info(unmute_size_warnings, #st{tab = T, size_warnings = W} = St) ->
     end,
     {noreply, St#st{size_warnings = 0}};
 handle_info({'EXIT', _, _} = _EXIT, St) ->
-    ?dbg(io:fwrite(user, "leveldb owner received ~p~n", [_EXIT])),
+    ?dbg("leveldb owner received ~p~n", [_EXIT]),
     {noreply, St};
 handle_info(_, St) ->
     {noreply, St}.
@@ -1014,8 +1025,8 @@ open_db(_, _, 0, LastError) ->
 open_db(MPd, Opts, RetriesLeft, _) ->
     case ?leveldb:open(MPd, Opts) of
         {ok, Ref} ->
-            ?dbg(io:fwrite("~p: Open - Leveldb: ~s~n  -> {ok, ~p}~n",
-                           [self(), MPd, Ref])),
+            ?dbg("~p: Open - Leveldb: ~s~n  -> {ok, ~p}~n",
+                 [self(), MPd, Ref]),
             {ok, Ref};
         %% Check specifically for lock error, this can be caused if
         %% a crashed mnesia takes some time to flush leveldb information
@@ -1025,10 +1036,9 @@ open_db(MPd, Opts, RetriesLeft, _) ->
             case lists:prefix("IO error: lock ", OpenErr) of
                 true ->
                     SleepFor = get_retry_delay(),
-                    ?dbg(io:fwrite(
-                           "~p: Open - Leveldb backend retrying ~p in ~p ms"
-                           " after error ~s\n",
-                           [self(), MPd, SleepFor, OpenErr])),
+                    ?dbg("~p: Open - Leveldb backend retrying ~p in ~p ms"
+                         " after error ~s\n",
+                         [self(), MPd, SleepFor, OpenErr]),
                     timer:sleep(SleepFor),
                     open_db(MPd, Opts, RetriesLeft - 1, Reason);
                 false ->
@@ -1065,10 +1075,10 @@ destroy_db(MPd, Opts) ->
 %% Essentially same code as above.
 destroy_db(MPd, Opts, Retries) ->
     _DRes = destroy_db(MPd, Opts, max(1, Retries), undefined),
-    ?dbg(io:fwrite("~p: Destroy ~s -> ~p~n", [self(), MPd, _DRes])),
+    ?dbg("~p: Destroy ~s -> ~p~n", [self(), MPd, _DRes]),
     [_|_] = MPd, % ensure MPd is non-empty
     _RmRes = os:cmd("rm -rf " ++ MPd ++ "/*"),
-    ?dbg(io:fwrite("~p: RmRes = '~s'~n", [self(), _RmRes])),
+    ?dbg("~p: RmRes = '~s'~n", [self(), _RmRes]),
     ok.
 
 destroy_db(_, _, 0, LastError) ->
@@ -1083,12 +1093,11 @@ destroy_db(MPd, Opts, RetriesLeft, _) ->
             case lists:prefix("IO error: lock ", Err) of
                 true ->
                     SleepFor = get_retry_delay(),
-                    ?dbg(io:fwrite(
-                           "~p: Destroy - Leveldb backend retrying ~p in ~p ms"
-                           " after error ~s\n"
-                           " children = ~p~n",
-                           [self(), MPd, SleepFor, Err,
-                            supervisor:which_children(mnesia_ext_sup)])),
+                    ?dbg("~p: Destroy - Leveldb backend retrying ~p in ~p ms"
+                         " after error ~s\n"
+                         " children = ~p~n",
+                         [self(), MPd, SleepFor, Err,
+                          supervisor:which_children(mnesia_ext_sup)]),
                     timer:sleep(SleepFor),
                     destroy_db(MPd, Opts, RetriesLeft - 1, Reason);
                 false ->
@@ -1121,12 +1130,12 @@ opt_call(Alias, Tab, Req) ->
     ProcName = proc_name(Alias, Tab),
     case whereis(ProcName) of
         undefined ->
-            ?dbg(io:fwrite("proc_name(~p, ~p): ~p; NO PROCESS~n",
-                           [Alias, Tab, ProcName])),
+            ?dbg("proc_name(~p, ~p): ~p; NO PROCESS~n",
+                 [Alias, Tab, ProcName]),
             {error, noproc};
         Pid when is_pid(Pid) ->
-            ?dbg(io:fwrite("proc_name(~p, ~p): ~p; Pid = ~p~n",
-                           [Alias, Tab, ProcName, Pid])),
+            ?dbg("proc_name(~p, ~p): ~p; Pid = ~p~n",
+                 [Alias, Tab, ProcName, Pid]),
             {ok, gen_server:call(Pid, Req, infinity)}
     end.
 
