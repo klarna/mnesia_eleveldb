@@ -918,7 +918,7 @@ handle_call(delete_table, _From, #st{tab = T, ref = Ref, ets = Ets} = St) ->
     {stop, normal, ok, St#st{ref = undefined}}.
 
 handle_cast(size_warning, #st{tab = T, size_warnings = W} = St) when W < 10 ->
-    error_logger:warning_report([{table, T}, "large size retrieved"]),
+    mnesia_lib:warning("large size retrieved from table: ~p~n", [T]),
     if W =:= 9 ->
             OneHrMs = 60 * 60 * 1000,
             erlang:send_after(OneHrMs, self(), unmute_size_warnings);
@@ -934,7 +934,8 @@ handle_cast(_, St) ->
 handle_info(unmute_size_warnings, #st{tab = T, size_warnings = W} = St) ->
     C = W - 10,
     if C > 0 ->
-            error_logger:warning_report([{table, T}, {count, C}, "warnings suppressed"]);
+            mnesia_lib:warning("warnings suppressed~ntable: ~p, count: ~p~n",
+                               [T, C]);
        true ->
             ok
     end,
