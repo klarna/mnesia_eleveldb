@@ -62,10 +62,10 @@
 -define(IMAX1, 16#ffffFFFFffffFFFF).
 
 -ifdef(DEBUG).
--define(dbg(Fmt,Args),
-        case get(dbg) of
-            true -> io:fwrite("~p: " ++ Fmt, [?LINE|Args]);
-            _ -> ok
+-define(dbg(Fmt, Args),
+        case os:getenv("MNESIA_SEXT_DEBUG") of
+            false -> ok;
+            _ -> io:fwrite(user,"~p:~p: "++(Fmt),[?MODULE,?LINE|Args])
         end).
 -else.
 -define(dbg(F,A), ok).

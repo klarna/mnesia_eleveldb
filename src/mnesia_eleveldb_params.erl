@@ -38,7 +38,11 @@
 -define(MB, 1024 * 1024).
 -define(GB, 1024 * 1024 * 1024).
 
--define(dbg(Fmt, Args), io:fwrite("~w: " ++ Fmt, [?LINE|Args])).
+-ifdef(DEBUG).
+-define(dbg(Fmt, Args), io:fwrite(user,"~p:~p: "++(Fmt),[?MODULE,?LINE|Args])).
+-else.
+-define(dbg(Fmt, Args), ok).
+-endif.
 
 lookup(Tab, Default) ->
     try ets:lookup(?MODULE, Tab) of
