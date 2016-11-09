@@ -754,9 +754,15 @@ i_move_to_prev(I, Key) ->
 repair_continuation(Cont, _Ms) ->
     Cont.
 
-select(C) ->
-    Cont = get_sel_cont(C),
-    Cont().
+select(Cont) ->
+    %% Handle {ModOrAlias, Cont} wrappers for backwards compatibility with
+    %% older versions of mnesia_ext (before OTP 20).
+    case Cont of
+        {_, '$end_of_table'} -> '$end_of_table';
+        {_, Cont}            -> Cont();
+        '$end_of_table'      -> '$end_of_table';
+        _                    -> Cont()
+    end.
 
 select(Alias, Tab, Ms) ->
     case select(Alias, Tab, Ms, infinity) of
@@ -1552,26 +1558,6 @@ relevant_guards(Gs, Vars) ->
                 end,
             lists:filter(Fun, Gs)
     end.
-
-get_sel_cont(C) ->
-    Cont = case C of
-               {?MODULE, C1} -> C1;
-               _ -> C
-           end,
-    case Cont of
-        _ when is_function(Cont, 0) ->
-            case erlang:fun_info(Cont, module) of
-                {_, ?MODULE} ->
-                    Cont;
-                _ ->
-                    erlang:error(badarg)
-            end;
-        '$end_of_table' ->
-            fun() -> '$end_of_table' end;
-        _ ->
-            erlang:error(badarg)
-    end.
-
 
 %% ----------------------------------------------------------------------------
 %% COMMON PRIVATE
