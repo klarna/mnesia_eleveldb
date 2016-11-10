@@ -1485,17 +1485,12 @@ select_traverse({ok, K, V}, Limit, Pfx, MS, I, #sel{tab = Tab} = Sel,
 		      ?leveldb:iterator_move(I, next), Limit, Pfx, MS,
 		      I, Sel, AccKeys, Acc);
 		[Match] ->
-                    Fun = fun(NewLimit, NewAcc, NewI) ->
-                                  select_traverse(iterator_next(NewI, K),
-                                                  NewLimit, Pfx, MS, NewI, Sel,
-                                                  AccKeys, NewAcc)
-                          end,
                     Acc1 = if AccKeys ->
                                    [{K, Match}|Acc];
                               true ->
                                    [Match|Acc]
                            end,
-                    traverse_continue(decr(Limit), Fun, Acc1, I, Sel)
+                    traverse_continue(K, decr(Limit), Pfx, MS, I, Sel, AccKeys, Acc1)
             end;
         false ->
             {lists:reverse(Acc), '$end_of_table'}
@@ -1517,17 +1512,19 @@ decr(I) when is_integer(I) ->
 decr(infinity) ->
     infinity.
 
-traverse_continue(0, F, Acc, OldI, #sel{limit = Limit, ref = Ref}) ->
+traverse_continue(K, 0, Pfx, MS, OldI, #sel{limit = Limit, ref = Ref} = Sel, AccKeys, Acc) ->
     {lists:reverse(Acc),
      fun() ->
 	     catch ?leveldb:iterator_close(OldI),
 	     with_iterator(Ref,
 			   fun(I) ->
-				   F(Limit, [], I)
+                                   select_traverse(iterator_next(I, K),
+                                                   Limit, Pfx, MS, I, Sel,
+                                                   AccKeys, [])
 			   end)
      end};
-traverse_continue(Limit, F, Acc, I, _) ->
-    F(Limit, Acc, I).
+traverse_continue(_K, Limit, Pfx, MS, I, Sel, AccKeys, Acc) ->
+    select_traverse(?leveldb:iterator_move(I, next), Limit, Pfx, MS, I, Sel, AccKeys, Acc).
 
 iterator_next(I, K) ->
     case ?leveldb:iterator_move(I, K) of
