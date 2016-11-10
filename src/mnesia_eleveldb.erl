@@ -1512,10 +1512,9 @@ decr(I) when is_integer(I) ->
 decr(infinity) ->
     infinity.
 
-traverse_continue(K, 0, Pfx, MS, OldI, #sel{limit = Limit, ref = Ref} = Sel, AccKeys, Acc) ->
+traverse_continue(K, 0, Pfx, MS, _OldI, #sel{limit = Limit, ref = Ref} = Sel, AccKeys, Acc) ->
     {lists:reverse(Acc),
      fun() ->
-	     catch ?leveldb:iterator_close(OldI),
 	     with_iterator(Ref,
 			   fun(I) ->
                                    select_traverse(iterator_next(I, K),
