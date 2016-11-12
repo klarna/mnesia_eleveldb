@@ -1512,13 +1512,13 @@ decr(I) when is_integer(I) ->
 decr(infinity) ->
     infinity.
 
-traverse_continue(K, 0, Pfx, MS, _OldI, #sel{limit = Limit, ref = Ref} = Sel, AccKeys, Acc) ->
+traverse_continue(K, 0, Pfx, MS, _I, #sel{limit = Limit, ref = Ref} = Sel, AccKeys, Acc) ->
     {lists:reverse(Acc),
      fun() ->
 	     with_iterator(Ref,
-			   fun(I) ->
-                                   select_traverse(iterator_next(I, K),
-                                                   Limit, Pfx, MS, I, Sel,
+			   fun(NewI) ->
+                                   select_traverse(iterator_next(NewI, K),
+                                                   Limit, Pfx, MS, NewI, Sel,
                                                    AccKeys, [])
 			   end)
      end};
