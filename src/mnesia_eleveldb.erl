@@ -759,7 +759,7 @@ select(Cont) ->
     %% older versions of mnesia_ext (before OTP 20).
     case Cont of
         {_, '$end_of_table'} -> '$end_of_table';
-        {_, Cont}            -> Cont();
+        {_, Cont1}           -> Cont1();
         '$end_of_table'      -> '$end_of_table';
         _                    -> Cont()
     end.
