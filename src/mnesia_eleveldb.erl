@@ -112,7 +112,7 @@
 %% GEN SERVER CALLBACKS AND CALLS
 %%
 
--export([start_proc/4,
+-export([start_proc/5,
          init/1,
          handle_call/3,
          handle_info/2,
@@ -169,7 +169,7 @@
               tab,
               ref,
               keypat,
-              ms,                               % TODO: not used
+              record_name,
               compiled_ms,
               limit,
               key_only = false,                 % TODO: not used
@@ -181,6 +181,7 @@
 	    , tab
 	    , type
 	    , size_warnings			% integer()
+	    , record_name			% atom()
 	    , maintain_size			% boolean()
 	    }).
 
@@ -370,16 +371,27 @@ load_table(Alias, Tab, _LoadReason, Opts) ->
     ProcName = proc_name(Alias, Tab),
     case whereis(ProcName) of
         undefined ->
-            load_table_(Alias, Tab, Type, LdbOpts);
+            RecName = record_name(Tab, Opts),
+            load_table_(Alias, Tab, Type, LdbOpts, RecName);
         Pid ->
             gen_server:call(Pid, {load, Alias, Tab, Type, LdbOpts}, infinity)
     end.
 
-load_table_(Alias, Tab, Type, LdbOpts) ->
+%% In most cases Opts = mnesia_schema:cs2list(Cs), and so will include
+%% a {record_name, RecName} entry.  However, in mnesia_dumper Opts is a
+%% TabDef that allows mnesia_schema:list2cs(TabDef), and the record_name
+%% may be absent causing RecName to default to Tab -- we do the same.
+record_name(Tab, Opts) ->
+    case proplists:lookup(record_name, Opts) of
+        {record_name, RecName} -> RecName;
+        none -> Tab
+    end.
+
+load_table_(Alias, Tab, Type, LdbOpts, RecName) ->
     ShutdownTime = proplists:get_value(
                      owner_shutdown_time, LdbOpts, 120000),
     case mnesia_ext_sup:start_proc(
-           Tab, ?MODULE, start_proc, [Alias,Tab,Type, LdbOpts],
+           Tab, ?MODULE, start_proc, [Alias,Tab,Type,LdbOpts,RecName],
            [{shutdown, ShutdownTime}]) of
         {ok, _Pid} ->
             ok;
@@ -870,12 +882,12 @@ tmp_suffixes() ->
 %% GEN SERVER CALLBACKS AND CALLS
 %% ----------------------------------------------------------------------------
 
-start_proc(Alias, Tab, Type, LdbOpts) ->
+start_proc(Alias, Tab, Type, LdbOpts, RecName) ->
     ProcName = proc_name(Alias, Tab),
     gen_server:start_link({local, ProcName}, ?MODULE,
-                          {Alias, Tab, Type, LdbOpts}, []).
+                          {Alias, Tab, Type, LdbOpts, RecName}, []).
 
-init({Alias, Tab, Type, LdbOpts}) ->
+init({Alias, Tab, Type, LdbOpts, RecName}) ->
     process_flag(trap_exit, true),
     {ok, Ref, Ets} = do_load_table(Tab, LdbOpts),
     St = #st{ ets = Ets
@@ -884,6 +896,7 @@ init({Alias, Tab, Type, LdbOpts}) ->
 	    , tab = Tab
 	    , type = Type
 	    , size_warnings = 0
+	    , record_name = RecName
 	    , maintain_size = should_maintain_size(Tab)
 	    },
     {ok, recover_size_info(St)}.
@@ -1397,7 +1410,6 @@ do_select(Ref, Tab, _Type, MS, AccKeys, Limit) when is_boolean(AccKeys) ->
     Sel = #sel{tab = Tab,
                ref = Ref,
                keypat = Keypat,
-               ms = MS,
                compiled_ms = ets:match_spec_compile(MS),
                key_only = needs_key_only(MS),
                limit = Limit},
