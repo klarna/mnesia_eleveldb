@@ -1013,6 +1013,7 @@ default_open_opts() ->
                            "LEVELDB_WRITE_BUFFER_SIZE", "4194304"))}
       , {compression,
          list_to_atom(get_env_default("LEVELDB_COMPRESSION", "true"))}
+      , {use_bloomfilter, true}
     ].
 
 destroy_recreate(MPd, LdbOpts) ->
