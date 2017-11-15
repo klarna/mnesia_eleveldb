@@ -372,7 +372,7 @@ load_table(Alias, Tab, _LoadReason, Opts) ->
         undefined ->
             load_table_(Alias, Tab, Type, LdbOpts);
         Pid ->
-            gen_server:call(Pid, {load, Alias, Tab, Type, LdbOpts})
+            gen_server:call(Pid, {load, Alias, Tab, Type, LdbOpts}, infinity)
     end.
 
 load_table_(Alias, Tab, Type, LdbOpts) ->
