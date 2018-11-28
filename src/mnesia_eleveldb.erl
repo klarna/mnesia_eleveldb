@@ -633,11 +633,12 @@ fixtable(_Alias, _Tab, _Bool) ->
     true.
 
 %% To save storage space, we avoid storing the key twice. We replace the key
-%% in the record with []. It has to be put back in lookup/3.
+%% in the record with []. It has to be put back in lookup/3.  Similarly we
+%% avoid storing the record name.
 insert(Alias, Tab, Obj) ->
     Pos = keypos(Tab),
     EncKey = encode_key(element(Pos, Obj)),
-    EncVal = encode_val(setelement(Pos, Obj, [])),
+    EncVal = encode_val(set_record(Pos, Obj, [], [])),
     call(Alias, Tab, {insert, EncKey, EncVal}).
 
 last(Alias, Tab) ->
