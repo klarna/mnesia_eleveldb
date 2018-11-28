@@ -647,7 +647,7 @@ i_last(I) ->
 %% into the found record.
 lookup(Alias, Tab, Key) ->
     Enc = encode_key(Key),
-    {Ref, Type} = call(Alias, Tab, get_ref),
+    {Ref, Type} = get_ref(Alias, Tab),
     case Type of
 	bag -> lookup_bag(Ref, Key, Enc, keypos(Tab));
 	_ ->
@@ -672,7 +672,7 @@ lookup_bag_(Sz, Enc, {ok, Enc, _}, K, I, KP) ->
 lookup_bag_(Sz, Enc, Res, K, I, KP) ->
     case Res of
 	{ok, <<Enc:Sz/binary, _:?BAG_CNT>>, V} ->
-	    [setelement(KP, decode_val(V), K)|
+	    [setelement(KP, decode_val(V), K) |
 	     lookup_bag_(Sz, Enc, ?leveldb:iterator_move(I, next), K, I, KP)];
 	_ ->
 	    []
@@ -725,7 +725,7 @@ i_next_loop(_, _I, _Key) ->
     '$end_of_table'.
 
 prev(Alias, Tab, Key0) ->
-    {Ref, _Type} = call(Alias, Tab, get_ref),
+    {Ref, _Type} = get_ref(Alias, Tab),
     Key = encode_key(Key0),
     with_keys_only_iterator(Ref, fun(I) -> i_prev(I, Key) end).
 
