@@ -913,8 +913,8 @@ handle_call({load, Alias, Tab, Type, LdbOpts}, _From,
             #st{type = Type, alias = Alias, tab = Tab} = St) ->
     {ok, Ref, Ets} = do_load_table(Tab, LdbOpts),
     {reply, ok, St#st{ref = Ref, ets = Ets}};
-handle_call(get_ref, _From, #st{ref = Ref, type = Type} = St) ->
-    {reply, {Ref, Type}, St};
+handle_call(get_ref, _From, #st{ref = Ref, type = Type, record_name = RecName} = St) ->
+    {reply, {Ref, Type, RecName}, St};
 handle_call({write_info, Key, Value}, _From, #st{} = St) ->
     _ = write_info_(Key, Value, St),
     {reply, ok, St};
