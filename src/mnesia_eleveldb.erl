@@ -112,7 +112,7 @@
 %% GEN SERVER CALLBACKS AND CALLS
 %%
 
--export([start_proc/4,
+-export([start_proc/5,
          init/1,
          handle_call/3,
          handle_info/2,
@@ -169,7 +169,7 @@
               tab,
               ref,
               keypat,
-              ms,                               % TODO: not used
+              record_name,
               compiled_ms,
               limit,
               key_only = false,                 % TODO: not used
@@ -181,6 +181,7 @@
 	    , tab
 	    , type
 	    , size_warnings			% integer()
+	    , record_name			% atom()
 	    , maintain_size			% boolean()
 	    }).
 
@@ -218,14 +219,14 @@ show_table(Alias, Tab) ->
     show_table(Alias, Tab, 100).
 
 show_table(Alias, Tab, Limit) ->
-    {Ref, _Type} = get_ref(Alias, Tab),
-    with_iterator(Ref, fun(I) -> i_show_table(I, first, Limit) end).
+    {Ref, _Type, RecName} = get_ref(Alias, Tab),
+    with_iterator(Ref, fun(I) -> i_show_table(I, first, Limit, RecName) end).
 
 %% PRIVATE
 
-i_show_table(_, _, 0) ->
+i_show_table(_, _, 0, _RecName) ->
     {error, skipped_some};
-i_show_table(I, Move, Limit) ->
+i_show_table(I, Move, Limit, RecName) ->
     case ?leveldb:iterator_move(I, Move) of
         {ok, EncKey, EncVal} ->
             {Type,Val} =
@@ -235,11 +236,11 @@ i_show_table(I, Move, Limit) ->
                     _ ->
                         K = decode_key(EncKey),
                         V = decode_val(EncVal),
-                        V2 = setelement(2,V,K),
+                        V2 = set_record(2, V, K, RecName),
                         {data,V2}
                 end,
             io:fwrite("~p: ~p~n", [Type, Val]),
-            i_show_table(I, next, Limit-1);
+            i_show_table(I, next, Limit-1, RecName);
         _ ->
             ok
     end.
@@ -370,16 +371,27 @@ load_table(Alias, Tab, _LoadReason, Opts) ->
     ProcName = proc_name(Alias, Tab),
     case whereis(ProcName) of
         undefined ->
-            load_table_(Alias, Tab, Type, LdbOpts);
+            RecName = record_name(Tab, Opts),
+            load_table_(Alias, Tab, Type, LdbOpts, RecName);
         Pid ->
             gen_server:call(Pid, {load, Alias, Tab, Type, LdbOpts}, infinity)
     end.
 
-load_table_(Alias, Tab, Type, LdbOpts) ->
+%% In most cases Opts = mnesia_schema:cs2list(Cs), and so will include
+%% a {record_name, RecName} entry.  However, in mnesia_dumper Opts is a
+%% TabDef that allows mnesia_schema:list2cs(TabDef), and the record_name
+%% may be absent causing RecName to default to Tab -- we do the same.
+record_name(Tab, Opts) ->
+    case proplists:lookup(record_name, Opts) of
+        {record_name, RecName} -> RecName;
+        none -> Tab
+    end.
+
+load_table_(Alias, Tab, Type, LdbOpts, RecName) ->
     ShutdownTime = proplists:get_value(
                      owner_shutdown_time, LdbOpts, 120000),
     case mnesia_ext_sup:start_proc(
-           Tab, ?MODULE, start_proc, [Alias,Tab,Type, LdbOpts],
+           Tab, ?MODULE, start_proc, [Alias,Tab,Type,LdbOpts,RecName],
            [{shutdown, ShutdownTime}]) of
         {ok, _Pid} ->
             ok;
@@ -604,7 +616,7 @@ delete(Alias, Tab, Key) ->
     ok.
 
 first(Alias, Tab) ->
-    {Ref, _Type} = get_ref(Alias, Tab),
+    {Ref, _Type, _RecName} = get_ref(Alias, Tab),
     with_keys_only_iterator(Ref, fun i_first/1).
 
 %% PRIVATE ITERATOR
@@ -621,15 +633,16 @@ fixtable(_Alias, _Tab, _Bool) ->
     true.
 
 %% To save storage space, we avoid storing the key twice. We replace the key
-%% in the record with []. It has to be put back in lookup/3.
+%% in the record with []. It has to be put back in lookup/3.  Similarly we
+%% avoid storing the record name.
 insert(Alias, Tab, Obj) ->
     Pos = keypos(Tab),
     EncKey = encode_key(element(Pos, Obj)),
-    EncVal = encode_val(setelement(Pos, Obj, [])),
+    EncVal = encode_val(set_record(Pos, Obj, [], [])),
     call(Alias, Tab, {insert, EncKey, EncVal}).
 
 last(Alias, Tab) ->
-    {Ref, _Type} = get_ref(Alias, Tab),
+    {Ref, _Type, _RecName} = get_ref(Alias, Tab),
     with_keys_only_iterator(Ref, fun i_last/1).
 
 %% PRIVATE ITERATOR
@@ -647,33 +660,33 @@ i_last(I) ->
 %% into the found record.
 lookup(Alias, Tab, Key) ->
     Enc = encode_key(Key),
-    {Ref, Type} = call(Alias, Tab, get_ref),
+    {Ref, Type, RecName} = get_ref(Alias, Tab),
     case Type of
-	bag -> lookup_bag(Ref, Key, Enc, keypos(Tab));
+	bag -> lookup_bag(Ref, Key, Enc, keypos(Tab), RecName);
 	_ ->
 	    case ?leveldb:get(Ref, Enc, []) of
 		{ok, EncVal} ->
-		    [setelement(keypos(Tab), decode_val(EncVal), Key)];
+		    [set_record(keypos(Tab), decode_val(EncVal), Key, RecName)];
 		_ ->
 		    []
 	    end
     end.
 
-lookup_bag(Ref, K, Enc, KP) ->
+lookup_bag(Ref, K, Enc, KP, RecName) ->
     Sz = byte_size(Enc),
     with_iterator(
       Ref, fun(I) ->
 		   lookup_bag_(Sz, Enc, ?leveldb:iterator_move(I, Enc),
-			       K, I, KP)
+			       K, I, KP, RecName)
 	   end).
 
-lookup_bag_(Sz, Enc, {ok, Enc, _}, K, I, KP) ->
-    lookup_bag_(Sz, Enc, ?leveldb:iterator_move(I, next), K, I, KP);
-lookup_bag_(Sz, Enc, Res, K, I, KP) ->
+lookup_bag_(Sz, Enc, {ok, Enc, _}, K, I, KP, RecName) ->
+    lookup_bag_(Sz, Enc, ?leveldb:iterator_move(I, next), K, I, KP, RecName);
+lookup_bag_(Sz, Enc, Res, K, I, KP, RecName) ->
     case Res of
 	{ok, <<Enc:Sz/binary, _:?BAG_CNT>>, V} ->
-	    [setelement(KP, decode_val(V), K)|
-	     lookup_bag_(Sz, Enc, ?leveldb:iterator_move(I, next), K, I, KP)];
+	    [set_record(KP, decode_val(V), K, RecName) |
+	     lookup_bag_(Sz, Enc, ?leveldb:iterator_move(I, next), K, I, KP, RecName)];
 	_ ->
 	    []
     end.
@@ -701,7 +714,7 @@ match_delete(Alias, Tab, Pat) when is_tuple(Pat) ->
 
 
 next(Alias, Tab, Key) ->
-    {Ref, _Type} = get_ref(Alias, Tab),
+    {Ref, _Type, _RecName} = get_ref(Alias, Tab),
     EncKey = encode_key(Key),
     with_keys_only_iterator(Ref, fun(I) -> i_next(I, EncKey, Key) end).
 
@@ -725,7 +738,7 @@ i_next_loop(_, _I, _Key) ->
     '$end_of_table'.
 
 prev(Alias, Tab, Key0) ->
-    {Ref, _Type} = call(Alias, Tab, get_ref),
+    {Ref, _Type, _RecName} = get_ref(Alias, Tab),
     Key = encode_key(Key0),
     with_keys_only_iterator(Ref, fun(I) -> i_prev(I, Key) end).
 
@@ -773,15 +786,15 @@ select(Alias, Tab, Ms) ->
     end.
 
 select(Alias, Tab, Ms, Limit) when Limit==infinity; is_integer(Limit) ->
-    {Ref, Type} = get_ref(Alias, Tab),
-    do_select(Ref, Tab, Type, Ms, Limit).
+    {Ref, Type, RecName} = get_ref(Alias, Tab),
+    do_select(Ref, Tab, Type, Ms, Limit, RecName).
 
 slot(Alias, Tab, Pos) when is_integer(Pos), Pos >= 0 ->
-    {Ref, Type} = get_ref(Alias, Tab),
+    {Ref, Type, RecName} = get_ref(Alias, Tab),
     First = fun(I) -> ?leveldb:iterator_move(I, <<?DATA_START>>) end,
     F = case Type of
-            bag -> fun(I) -> slot_iter_set(First(I), I, 0, Pos) end;
-            _   -> fun(I) -> slot_iter_set(First(I), I, 0, Pos) end
+            bag -> fun(I) -> slot_iter_set(First(I), I, 0, Pos, RecName) end;
+            _   -> fun(I) -> slot_iter_set(First(I), I, 0, Pos, RecName) end
         end,
     with_iterator(Ref, F);
 slot(_, _, _) ->
@@ -790,11 +803,11 @@ slot(_, _, _) ->
 %% Exactly which objects Mod:slot/2 is supposed to return is not defined,
 %% so let's just use the same version for both set and bag. No one should
 %% use this function anyway, as it is ridiculously inefficient.
-slot_iter_set({ok, K, V}, _I, P, P) ->
-    [setelement(2, decode_val(V), decode_key(K))];
-slot_iter_set({ok, _, _}, I, P1, P) when P1 < P ->
-    slot_iter_set(?leveldb:iterator_move(I, next), I, P1+1, P);
-slot_iter_set(Res, _, _, _) when element(1, Res) =/= ok ->
+slot_iter_set({ok, K, V}, _I, P, P, RecName) ->
+    [set_record(2, decode_val(V), decode_key(K), RecName)];
+slot_iter_set({ok, _, _}, I, P1, P, RecName) when P1 < P ->
+    slot_iter_set(?leveldb:iterator_move(I, next), I, P1+1, P, RecName);
+slot_iter_set(Res, _, _, _, _) when element(1, Res) =/= ok ->
     '$end_of_table'.
 
 update_counter(Alias, Tab, C, Val) when is_integer(Val) ->
@@ -870,12 +883,12 @@ tmp_suffixes() ->
 %% GEN SERVER CALLBACKS AND CALLS
 %% ----------------------------------------------------------------------------
 
-start_proc(Alias, Tab, Type, LdbOpts) ->
+start_proc(Alias, Tab, Type, LdbOpts, RecName) ->
     ProcName = proc_name(Alias, Tab),
     gen_server:start_link({local, ProcName}, ?MODULE,
-                          {Alias, Tab, Type, LdbOpts}, []).
+                          {Alias, Tab, Type, LdbOpts, RecName}, []).
 
-init({Alias, Tab, Type, LdbOpts}) ->
+init({Alias, Tab, Type, LdbOpts, RecName}) ->
     process_flag(trap_exit, true),
     {ok, Ref, Ets} = do_load_table(Tab, LdbOpts),
     St = #st{ ets = Ets
@@ -884,6 +897,7 @@ init({Alias, Tab, Type, LdbOpts}) ->
 	    , tab = Tab
 	    , type = Type
 	    , size_warnings = 0
+	    , record_name = RecName
 	    , maintain_size = should_maintain_size(Tab)
 	    },
     {ok, recover_size_info(St)}.
@@ -900,8 +914,8 @@ handle_call({load, Alias, Tab, Type, LdbOpts}, _From,
             #st{type = Type, alias = Alias, tab = Tab} = St) ->
     {ok, Ref, Ets} = do_load_table(Tab, LdbOpts),
     {reply, ok, St#st{ref = Ref, ets = Ets}};
-handle_call(get_ref, _From, #st{ref = Ref, type = Type} = St) ->
-    {reply, {Ref, Type}, St};
+handle_call(get_ref, _From, #st{ref = Ref, type = Type, record_name = RecName} = St) ->
+    {reply, {Ref, Type, RecName}, St};
 handle_call({write_info, Key, Value}, _From, #st{} = St) ->
     _ = write_info_(Key, Value, St),
     {reply, ok, St};
@@ -1279,9 +1293,10 @@ do_delete_bag_(Sz, K, Res, Ref, I) ->
     end.
 
 do_match_delete(Pat, #st{ets = Ets, ref = Ref, tab = Tab, type = Type,
+			 record_name = RecName,
 			 maintain_size = MaintainSize}) ->
     Fun = fun(_, Key, Acc) -> [Key|Acc] end,
-    Keys = do_fold(Ref, Tab, Type, Fun, [], [{Pat,[],['$_']}], 30),
+    Keys = do_fold(Ref, Tab, Type, Fun, [], [{Pat,[],['$_']}], 30, RecName),
     case {Keys, MaintainSize} of
 	{[], _} ->
 	    ok;
@@ -1301,13 +1316,14 @@ do_match_delete(Pat, #st{ets = Ets, ref = Ref, tab = Tab, type = Type,
 recover_size_info(#st{ ref = Ref
 		     , tab = Tab
 		     , type = Type
+		     , record_name = RecName
 		     , maintain_size = MaintainSize
 		     } = St) ->
     %% TODO: shall_update_size_info is obsolete, remove
     case shall_update_size_info(Tab) of
 	true ->
 	    Sz = do_fold(Ref, Tab, Type, fun(_, Acc) -> Acc+1 end,
-			 0, [{'_',[],['$_']}], 3),
+			 0, [{'_',[],['$_']}], 3, RecName),
 	    write_info_(size, Sz, St);
 	false ->
 	    case MaintainSize of
@@ -1389,17 +1405,17 @@ proc_name(_Alias, Tab) ->
 %% PRIVATE SELECT MACHINERY
 %% ----------------------------------------------------------------------------
 
-do_select(Ref, Tab, Type, MS, Limit) ->
-    do_select(Ref, Tab, Type, MS, false, Limit).
+do_select(Ref, Tab, Type, MS, Limit, RecName) ->
+    do_select(Ref, Tab, Type, MS, false, Limit, RecName).
 
-do_select(Ref, Tab, _Type, MS, AccKeys, Limit) when is_boolean(AccKeys) ->
+do_select(Ref, Tab, _Type, MS, AccKeys, Limit, RecName) when is_boolean(AccKeys) ->
     Keypat = keypat(MS, keypos(Tab)),
     Sel = #sel{tab = Tab,
                ref = Ref,
                keypat = Keypat,
-               ms = MS,
                compiled_ms = ets:match_spec_compile(MS),
                key_only = needs_key_only(MS),
+               record_name = RecName,
                limit = Limit},
     with_iterator(Ref, fun(I) -> i_do_select(I, Sel, AccKeys, []) end).
 
@@ -1475,11 +1491,11 @@ map_vars([H|T], P) ->
 map_vars([], _) ->
     [].
 
-select_traverse({ok, K, V}, Limit, Pfx, MS, I, #sel{tab = Tab} = Sel,
+select_traverse({ok, K, V}, Limit, Pfx, MS, I, #sel{tab = Tab, record_name = RecName} = Sel,
                 AccKeys, Acc) ->
     case is_prefix(Pfx, K) of
 	true ->
-	    Rec = setelement(keypos(Tab), decode_val(V), decode_key(K)),
+	    Rec = set_record(keypos(Tab), decode_val(V), decode_key(K), RecName),
 	    case ets:match_spec_run([Rec], MS) of
 		[] ->
 		    select_traverse(
@@ -1589,6 +1605,16 @@ encode_val(Val) ->
 decode_val(CodedVal) ->
     binary_to_term(CodedVal).
 
+%% Update key and record name in the record with new values.
+%% Used both in write (set both to []) and read paths (replace
+%% with decoded key and known record name, respectively).
+%% If key position is 1 then don't set the record name,
+%% only the key -- see keypos/1.
+set_record(1, Record, KeyVal, _RecName) ->
+    setelement(1, Record, KeyVal);
+set_record(KeyPos, Record, KeyVal, RecName) ->
+    setelement(1, setelement(KeyPos, Record, KeyVal), RecName).
+
 create_mountpoint(Tab) ->
     MPd = data_mountpoint(Tab),
     case filelib:is_dir(MPd) of
@@ -1683,11 +1709,11 @@ get_ref(Alias, Tab) ->
     call(Alias, Tab, get_ref).
 
 fold(Alias, Tab, Fun, Acc, MS, N) ->
-    {Ref, Type} = get_ref(Alias, Tab),
-    do_fold(Ref, Tab, Type, Fun, Acc, MS, N).
+    {Ref, Type, RecName} = get_ref(Alias, Tab),
+    do_fold(Ref, Tab, Type, Fun, Acc, MS, N, RecName).
 
 %% can be run on the server side.
-do_fold(Ref, Tab, Type, Fun, Acc, MS, N) ->
+do_fold(Ref, Tab, Type, Fun, Acc, MS, N, RecName) ->
     {AccKeys, F} =
         if is_function(Fun, 3) ->
                 {true, fun({K,Obj}, Acc1) ->
@@ -1696,7 +1722,7 @@ do_fold(Ref, Tab, Type, Fun, Acc, MS, N) ->
            is_function(Fun, 2) ->
                 {false, Fun}
         end,
-    do_fold1(do_select(Ref, Tab, Type, MS, AccKeys, N), F, Acc).
+    do_fold1(do_select(Ref, Tab, Type, MS, AccKeys, N, RecName), F, Acc).
 
 do_fold1('$end_of_table', _, Acc) ->
     Acc;
