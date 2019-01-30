@@ -785,6 +785,8 @@ select(Alias, Tab, Ms) ->
             '$end_of_table'
     end.
 
+select(_Alias, _Tab, _Ms = [], _Limit) ->
+    {[], '$end_of_table'};
 select(Alias, Tab, Ms, Limit) when Limit==infinity; is_integer(Limit) ->
     {Ref, Type, RecName} = get_ref(Alias, Tab),
     do_select(Ref, Tab, Type, Ms, Limit, RecName).
