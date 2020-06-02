@@ -445,8 +445,8 @@ close_table_(Alias, Tab) ->
 pp_stack() ->
     Trace = try throw(true)
             catch
-                _:_ ->
-                    case erlang:get_stacktrace() of
+                _:_:StackTrace ->
+                    case StackTrace of
                         [_|T] -> T;
                         [] -> []
                     end
