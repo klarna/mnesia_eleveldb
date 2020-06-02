@@ -6,7 +6,7 @@ mnesia tables.
 
 ## Prerequisites
 - eleveldb (https://github.com/basho/eleveldb)
-- Erlang/OTP 19.0 or newer (https://github.com/erlang/otp)
+- Erlang/OTP 21.0 or newer (https://github.com/erlang/otp)
 
 ## Getting started
 
