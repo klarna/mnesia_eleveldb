@@ -290,20 +290,50 @@ prefix_bitstring(B) ->
     {false, <<?binary:8, Enc/binary>>}.
 
 encode_pid(P) ->
-    PBin = term_to_binary(P),
-    <<131,103,100,ALen:16,Name:ALen/binary,Rest:9/binary>> = PBin,
+    case term_to_binary(P) of
+      <<131,88,100,ALen:16,Name:ALen/binary,NS:8/binary,C:32>> ->
+        case C > 3 of
+          true -> encode_pid(Name, NS, <<255, C:32>>);
+          false -> encode_pid(Name, NS, <<C>>)
+        end;
+      <<131,103,100,ALen:16,Name:ALen/binary,NS:8/binary,C:8>> ->
+        true = C =< 3,
+        encode_pid(Name, NS, <<C>>)
+    end.
+
+encode_pid(Name, NS, C) ->
     NameEnc = encode_bin_elems(Name),
-    <<?pid, NameEnc/binary, Rest/binary>>.
+    <<?pid, NameEnc/binary, NS/binary, C/binary>>.
 
 encode_port(P) ->
-    PBin = term_to_binary(P),
-    <<131,102,100,ALen:16,Name:ALen/binary,Rest:5/binary>> = PBin,
+    case term_to_binary(P) of
+      <<131,89,100,ALen:16,Name:ALen/binary,N:4/binary,C:32>> ->
+        case C > 3 of
+          true -> encode_port(Name, N, <<255, C:32>>);
+          false -> encode_port(Name, N, <<C>>)
+        end;
+      <<131,102,100,ALen:16,Name:ALen/binary,N:4/binary,C:8>> ->
+        true = C =< 3,
+        encode_port(Name, N, <<C>>)
+    end.
+
+encode_port(Name, N, C) ->
     NameEnc = encode_bin_elems(Name),
-    <<?port, NameEnc/binary, Rest/binary>>.
+    <<?port, NameEnc/binary, N/binary, C/binary>>.
 
 encode_ref(R) ->
-    RBin = term_to_binary(R),
-    <<131,114,_Len:16,100,NLen:16,Name:NLen/binary,Rest/binary>> = RBin,
+    case term_to_binary(R) of
+      <<131,90,_Len:16,100,NLen:16,Name:NLen/binary,C:32,Rest/binary>> ->
+        case C > 3 of
+          true -> encode_ref(Name, <<255, C:32, Rest/binary>>);
+          false -> encode_ref(Name, <<C, Rest/binary>>)
+        end;
+      <<131,114,_Len:16,100,NLen:16,Name:NLen/binary,C:8,Rest/binary>> ->
+        true = C =< 3,
+        encode_ref(Name, <<C, Rest/binary>>)
+    end.
+
+encode_ref(Name, Rest) ->
     NameEnc = encode_bin_elems(Name),
     RestEnc = encode_bin_elems(Rest),
     <<?reference, NameEnc/binary, RestEnc/binary>>.
@@ -771,23 +801,41 @@ decode_list(Elems, Acc) ->
 
 decode_pid(Bin) ->
     {Name, Rest} = decode_binary(Bin),
-    <<Tail:9/binary, Rest1/binary>> = Rest,
     NameSz = size(Name),
-    {binary_to_term(<<131,103,100,NameSz:16,Name/binary,Tail/binary>>), Rest1}.
+    case Rest of
+      <<NS:8/binary, 255, C:4/binary, Rest1/binary>> ->
+        {binary_to_term(<<131,88,100,NameSz:16,Name/binary,NS/binary,C/binary>>), Rest1};
+      <<NS:8/binary, C:8, Rest1/binary>> ->
+        true = C =< 3,
+        {binary_to_term(<<131,103,100,NameSz:16,Name/binary,NS/binary,C>>), Rest1}
+    end.
 
 decode_port(Bin) ->
     {Name, Rest} = decode_binary(Bin),
-    <<Tail:5/binary, Rest1/binary>> = Rest,
     NameSz = size(Name),
-    {binary_to_term(<<131,102,100,NameSz:16,Name/binary,Tail/binary>>), Rest1}.
+    case Rest of
+      <<N:4/binary, 255, C:4/binary, Rest1/binary>> ->
+        {binary_to_term(<<131,89,100,NameSz:16,Name/binary,N/binary,C/binary>>), Rest1};
+      <<N:4/binary, C:8, Rest1/binary>> ->
+        true = C =< 3,
+        {binary_to_term(<<131,102,100,NameSz:16,Name/binary,N/binary,C>>), Rest1}
+    end.
 
 decode_ref(Bin) ->
     {Name, Rest} = decode_binary(Bin),
     {Tail, Rest1} = decode_binary(Rest),
     NLen = size(Name),
-    Len = (size(Tail)-1) div 4,
-    RefBin = <<131,114,Len:16,100,NLen:16,Name/binary,Tail/binary>>,
-    {binary_to_term(RefBin), Rest1}.
+    case Tail of
+      <<255, C:4/binary, Tail1/binary>> ->
+        Len = size(Tail1) div 4,
+        RefBin = <<131,90,Len:16,100,NLen:16,Name/binary,C/binary,Tail1/binary>>,
+        {binary_to_term(RefBin), Rest1};
+      <<C:8, Tail1/binary>> ->
+        true = C =< 3,
+        Len = size(Tail1) div 4,
+        RefBin = <<131,114,Len:16,100,NLen:16,Name/binary,C,Tail1/binary>>,
+        {binary_to_term(RefBin), Rest1}
+    end.
 
 decode_neg(I, 1, Rest) ->
     {(I - 16#7fffFFFF), Rest};
