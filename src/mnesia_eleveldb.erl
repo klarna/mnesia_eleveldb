@@ -433,11 +433,6 @@ close_table_(Alias, Tab) ->
                  [self(), Tab]),
             ok;
         {ok, _} ->
-            ok;
-        _Other ->
-            ?dbg("~p: close_table_(~p) -> _Other = ~p~n",
-                 [self(), Tab, _Other]),
-            mnesia_ext_sup:stop_proc(Tab),
             ok
     end.
 
@@ -462,10 +457,9 @@ pp_calls(I, [{M,F,A,Pos} | T]) ->
     [Pp(M,F,A,Pos)|[["\n",Spc,Pp(M1,F1,A1,P1)] || {M1,F1,A1,P1} <- T]].
 
 pp_pos([]) -> "";
-pp_pos(L) when is_integer(L) ->
-    [" (", integer_to_list(L), ")"];
 pp_pos([{file,_},{line,L}]) ->
     [" (", integer_to_list(L), ")"].
+
 -endif.
 
 sync_close_table(Alias, Tab) ->
@@ -1261,7 +1255,7 @@ do_delete(Key, #st{ets = Ets, ref = Ref, maintain_size = true}) ->
     end.
 
 do_delete_bag(Sz, Key, Ref, TSz) ->
-    Found = 
+    Found =
 	with_keys_only_iterator(
 	  Ref, fun(I) ->
 		       do_delete_bag_(Sz, Key, ?leveldb:iterator_move(I, Key),
@@ -1395,9 +1389,7 @@ read_info(Item, Default, Ets) ->
     end.
 
 tab_name(icache, Tab) ->
-    list_to_atom("mnesia_ext_icache_" ++ tabname(Tab));
-tab_name(info, Tab) ->
-    list_to_atom("mnesia_ext_info_" ++ tabname(Tab)).
+    list_to_atom("mnesia_ext_icache_" ++ tabname(Tab)).
 
 proc_name(_Alias, Tab) ->
     list_to_atom("mnesia_ext_proc_" ++ tabname(Tab)).
