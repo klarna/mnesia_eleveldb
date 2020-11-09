@@ -172,8 +172,25 @@
               record_name,
               compiled_ms,
               limit,
-              key_only = false,                 % TODO: not used
+              key_only = false,                 % TODO: not used, see note below
               direction = forward}).            % TODO: not used
+
+%% The optimization for `key_only' iterators has been removed because
+%% (1) it was not used, and (2) would need to be rewritten to interact
+%% better with dialyzer.
+%%
+%% Details: ets:match_spec_compile/1 cannot be relied on to crash on
+%% inputs which violate its contract (in particular, the function only
+%% checks that the match spec is a list of 3-tuples, but performs no
+%% checks on the match head). As a result, dialyzer will assume that
+%% if ets:match_spec_compile/1 returns successfully, the match spec
+%% passed to it fulfills the spec. The original `key_only'
+%% optimization had dead code warnings doing runtime type checks which
+%% dialyzer deemed unnecessary (because the match spec had been passed
+%% to ets:match_spec_compile/1 without crashing). These would need to
+%% be rewritten to use try-catch instead to avoid the dead code
+%% warnings, but since the optimization isn't being used there was not
+%% much point in doing that refactoring.
 
 -record(st, { ets
 	    , ref
@@ -433,11 +450,6 @@ close_table_(Alias, Tab) ->
                  [self(), Tab]),
             ok;
         {ok, _} ->
-            ok;
-        _Other ->
-            ?dbg("~p: close_table_(~p) -> _Other = ~p~n",
-                 [self(), Tab, _Other]),
-            mnesia_ext_sup:stop_proc(Tab),
             ok
     end.
 
@@ -462,10 +474,9 @@ pp_calls(I, [{M,F,A,Pos} | T]) ->
     [Pp(M,F,A,Pos)|[["\n",Spc,Pp(M1,F1,A1,P1)] || {M1,F1,A1,P1} <- T]].
 
 pp_pos([]) -> "";
-pp_pos(L) when is_integer(L) ->
-    [" (", integer_to_list(L), ")"];
 pp_pos([{file,_},{line,L}]) ->
     [" (", integer_to_list(L), ")"].
+
 -endif.
 
 sync_close_table(Alias, Tab) ->
@@ -1261,7 +1272,7 @@ do_delete(Key, #st{ets = Ets, ref = Ref, maintain_size = true}) ->
     end.
 
 do_delete_bag(Sz, Key, Ref, TSz) ->
-    Found = 
+    Found =
 	with_keys_only_iterator(
 	  Ref, fun(I) ->
 		       do_delete_bag_(Sz, Key, ?leveldb:iterator_move(I, Key),
@@ -1395,9 +1406,7 @@ read_info(Item, Default, Ets) ->
     end.
 
 tab_name(icache, Tab) ->
-    list_to_atom("mnesia_ext_icache_" ++ tabname(Tab));
-tab_name(info, Tab) ->
-    list_to_atom("mnesia_ext_info_" ++ tabname(Tab)).
+    list_to_atom("mnesia_ext_icache_" ++ tabname(Tab)).
 
 proc_name(_Alias, Tab) ->
     list_to_atom("mnesia_ext_proc_" ++ tabname(Tab)).
@@ -1416,7 +1425,6 @@ do_select(Ref, Tab, _Type, MS, AccKeys, Limit, RecName) when is_boolean(AccKeys)
                ref = Ref,
                keypat = Keypat,
                compiled_ms = ets:match_spec_compile(MS),
-               key_only = needs_key_only(MS),
                record_name = RecName,
                limit = Limit},
     with_iterator(Ref, fun(I) -> i_do_select(I, Sel, AccKeys, []) end).
@@ -1433,65 +1441,6 @@ i_do_select(I, #sel{keypat = Pfx,
 	end,
     select_traverse(?leveldb:iterator_move(I, StartKey), Limit,
 		    Pfx, MS, I, Sel, AccKeys, Acc).
-
-needs_key_only([{HP,_,Body}]) ->
-    BodyVars = lists:flatmap(fun extract_vars/1, Body),
-    %% Note that we express the conditions for "needs more than key" and negate.
-    not(wild_in_body(BodyVars) orelse
-        case bound_in_headpat(HP) of
-            {all,V} -> lists:member(V, BodyVars);
-            none    -> false;
-            Vars    -> any_in_body(lists:keydelete(2,1,Vars), BodyVars)
-        end);
-needs_key_only(_) ->
-    %% don't know
-    false.
-
-extract_vars([H|T]) ->
-    extract_vars(H) ++ extract_vars(T);
-extract_vars(T) when is_tuple(T) ->
-    extract_vars(tuple_to_list(T));
-extract_vars(T) when T=='$$'; T=='$_' ->
-    [T];
-extract_vars(T) when is_atom(T) ->
-    case is_wild(T) of
-        true ->
-            [T];
-        false ->
-            []
-    end;
-extract_vars(_) ->
-    [].
-
-any_in_body(Vars, BodyVars) ->
-    lists:any(fun({_,Vs}) ->
-                      intersection(Vs, BodyVars) =/= []
-              end, Vars).
-
-intersection(A,B) when is_list(A), is_list(B) ->
-    A -- (A -- B).
-
-wild_in_body(BodyVars) ->
-    intersection(BodyVars, ['$$','$_']) =/= [].
-
-bound_in_headpat(HP) when is_atom(HP) ->
-    {all, HP};
-bound_in_headpat(HP) when is_tuple(HP) ->
-    [_|T] = tuple_to_list(HP),
-    map_vars(T, 2);
-bound_in_headpat(_) ->
-    %% this is not the place to throw an exception
-    none.
-
-map_vars([H|T], P) ->
-    case extract_vars(H) of
-        [] ->
-            map_vars(T, P+1);
-        Vs ->
-            [{P, Vs}|map_vars(T, P+1)]
-    end;
-map_vars([], _) ->
-    [].
 
 select_traverse({ok, K, V}, Limit, Pfx, MS, I, #sel{tab = Tab, record_name = RecName} = Sel,
                 AccKeys, Acc) ->
