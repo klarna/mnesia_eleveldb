@@ -291,15 +291,22 @@ prefix_bitstring(B) ->
 
 encode_pid(P) ->
     case term_to_binary(P) of
+      <<131,88,119,ALen:8,Name:ALen/binary,NS:8/binary,C:32>> ->
+        encode_pid_new(Name, NS, C);
       <<131,88,100,ALen:16,Name:ALen/binary,NS:8/binary,C:32>> ->
-        case C > 3 of
-          true -> encode_pid(Name, NS, <<255, C:32>>);
-          false -> encode_pid(Name, NS, <<C>>)
-        end;
+        encode_pid_new(Name, NS, C);
       <<131,103,100,ALen:16,Name:ALen/binary,NS:8/binary,C:8>> ->
         true = C =< 3,
         encode_pid(Name, NS, <<C>>)
     end.
+
+encode_pid_new(Name, NS, C) ->
+    CBin =
+      case C > 3 of
+        true -> <<255, C:32>>;
+        false -> <<C>>
+      end,
+    encode_pid(Name, NS, CBin).
 
 encode_pid(Name, NS, C) ->
     NameEnc = encode_bin_elems(Name),
@@ -307,15 +314,33 @@ encode_pid(Name, NS, C) ->
 
 encode_port(P) ->
     case term_to_binary(P) of
-      <<131,89,100,ALen:16,Name:ALen/binary,N:4/binary,C:32>> ->
-        case C > 3 of
-          true -> encode_port(Name, N, <<255, C:32>>);
-          false -> encode_port(Name, N, <<C>>)
+      <<131,120,119,ALen:8,Name:ALen/binary,N:64,C:32>> ->
+        case N bsr 28 of
+          0 -> encode_port_new(Name, <<N:32>>, C);
+          _ ->
+            %% N was limited to 28 bits previously, meaning the initial byte
+            %% in its binary was =< 15. We therefore prefix the 8-byte N with
+            %% a byte with value 16 to signal the V4 format, and to ensure V4
+            %% formats sort consistently with the previous format. In this
+            %% case we don't need to try shortening the C(reation) field.
+            encode_port(Name, <<16,N:64>>, <<C:32>>)
         end;
-      <<131,102,100,ALen:16,Name:ALen/binary,N:4/binary,C:8>> ->
+      <<131,89,100,ALen:16,Name:ALen/binary,N:32,C:32>> ->
+        0 = N bsr 28, % assert
+        encode_port_new(Name, <<N:32>>, C);
+      <<131,102,100,ALen:16,Name:ALen/binary,N:32,C:8>> ->
+        0 = N bsr 28, % assert
         true = C =< 3,
-        encode_port(Name, N, <<C>>)
+        encode_port(Name, <<N:32>>, <<C>>)
     end.
+
+encode_port_new(Name, N, C) ->
+    CBin =
+      case C > 3 of
+        true -> <<255, C:32>>;
+        false -> <<C>>
+      end,
+    encode_port(Name, N, CBin).
 
 encode_port(Name, N, C) ->
     NameEnc = encode_bin_elems(Name),
@@ -323,15 +348,22 @@ encode_port(Name, N, C) ->
 
 encode_ref(R) ->
     case term_to_binary(R) of
+      <<131,90,_Len:16,119,NLen:8,Name:NLen/binary,C:32,Rest/binary>> ->
+        encode_ref_newer(Name, C, Rest);
       <<131,90,_Len:16,100,NLen:16,Name:NLen/binary,C:32,Rest/binary>> ->
-        case C > 3 of
-          true -> encode_ref(Name, <<255, C:32, Rest/binary>>);
-          false -> encode_ref(Name, <<C, Rest/binary>>)
-        end;
+        encode_ref_newer(Name, C, Rest);
       <<131,114,_Len:16,100,NLen:16,Name:NLen/binary,C:8,Rest/binary>> ->
         true = C =< 3,
         encode_ref(Name, <<C, Rest/binary>>)
     end.
+
+encode_ref_newer(Name, C, Rest) ->
+    NewRest =
+      case C > 3 of
+        true -> <<255, C:32, Rest/binary>>;
+        false -> <<C, Rest/binary>>
+      end,
+    encode_ref(Name, NewRest).
 
 encode_ref(Name, Rest) ->
     NameEnc = encode_bin_elems(Name),
@@ -814,6 +846,8 @@ decode_port(Bin) ->
     {Name, Rest} = decode_binary(Bin),
     NameSz = size(Name),
     case Rest of
+      <<16, N:8/binary, 255, C:4/binary, Rest1/binary>> ->
+        {binary_to_term(<<131,120,100,NameSz:16,Name/binary,N/binary,C/binary>>), Rest1};
       <<N:4/binary, 255, C:4/binary, Rest1/binary>> ->
         {binary_to_term(<<131,89,100,NameSz:16,Name/binary,N/binary,C/binary>>), Rest1};
       <<N:4/binary, C:8, Rest1/binary>> ->
