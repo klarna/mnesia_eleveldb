@@ -8,5 +8,5 @@
   {registered, []},
   {mod, {mnesia_eleveldb_app, []}},
   {env, []},
-  {applications, [kernel, stdlib]}
+  {applications, [kernel, stdlib, eleveldb]}
  ]}.
